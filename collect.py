@@ -47,6 +47,22 @@ def fetch(rid):
     try: return [parse(v) for f, _, v in parse(d) if f == 2]
     except Exception: return None
 
+def auto_start():
+    """Premier round pas encore commence, d'apres la liste 'actual' du site."""
+    import re
+    r = subprocess.run(["curl", "-s", "--compressed", "-m", "20", *HDR,
+        "https://www.betpawa.cm/api/sportsbook/virtual/v2/seasons/list/actual"], capture_output=True)
+    ids = sorted({int(x) for x in re.findall(rb"1[0-9]{6}", r.stdout)})
+    if not ids: return None
+    run = [ids[-1]]
+    for x in reversed(ids[:-1]):
+        if x == run[-1] - 1: run.append(x)
+        else: break
+    for rid in sorted(run):
+        ev = fetch(rid)
+        if ev and not any(get(e, 3) for e in ev): return rid
+    return None
+
 def read_event(e):
     """-> dict with ids, odds (if any), minute and FT score (if any)."""
     o = {"event_id": get(e, 1)[0].decode()}
@@ -90,13 +106,16 @@ def main():
         a = argv.pop(0)
         if a == "--max-minutes": maxmin = float(argv.pop(0))
         elif a.strip(): args.append(a)
+    rid = None
     if os.path.exists(STATE): rid = int(open(STATE).read().strip())
-    elif args: rid = int(args[0])
-    else: sys.exit("premiere fois: donne le numero de round de depart")
+    elif args and args[0].isdigit(): rid = int(args[0])
+    if rid is None or (fetch(rid) is None and fetch(rid + 1) is None):
+        if rid is not None: print("round", rid, "introuvable, recherche automatique", flush=True)
+        rid = auto_start()
+        if rid is None: sys.exit("ERREUR: aucune reponse du site (blocage possible de cette machine)")
+        open(STATE, "w").write(str(rid))
     t0 = time.time(); odds = {}; seen = {}; cur = None
     print("depart au round", rid, flush=True)
-    if fetch(rid) is None and fetch(rid + 1) is None:
-        sys.exit("ERREUR: aucune reponse du site (blocage possible de cette machine)")
     while time.time() - t0 < maxmin * 60:
         for r in range(rid, rid + 4):
             ev = fetch(r)
