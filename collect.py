@@ -7,7 +7,7 @@ Every ~20 s it polls a few rounds ahead of the last finished one:
  - while it is being played: reads the scores
  - when all matches reach minute 90: appends one row per match to dataset.csv
 No raw files are kept; dataset.csv only grows. Field map inferred, not official."""
-import csv, datetime, os, struct, subprocess, sys, time
+import re, csv, datetime, os, struct, subprocess, sys, time
 
 URL = "https://www.betpawa.cm/api/sportsbook/virtual/v3/events/list/by-round/%d"
 HDR = ["-H", "x-pawa-brand: betpawa-cameroon", "-H", "accept: application/x-protobuf",
@@ -100,6 +100,11 @@ def writer_for_today(cur):
     if new: w.writeheader()
     return (day, w, f)
 
+def liste():
+    r = subprocess.run(["curl", "-s", "--compressed", "-m", "20", *HDR,
+        "https://www.betpawa.cm/api/sportsbook/virtual/v2/seasons/list/actual"], capture_output=True)
+    return sorted({int(x) for x in re.findall(rb"1[0-9]{6}", r.stdout)})
+
 def main():
     argv = sys.argv[1:]; maxmin = 1e9; args = []
     while argv:
@@ -109,38 +114,49 @@ def main():
     rid = None
     if os.path.exists(STATE): rid = int(open(STATE).read().strip())
     elif args and args[0].isdigit(): rid = int(args[0])
-    if rid is None or (fetch(rid) is None and fetch(rid + 1) is None):
-        if rid is not None: print("round", rid, "introuvable, recherche automatique", flush=True)
-        rid = auto_start()
-        if rid is None: sys.exit("ERREUR: aucune reponse du site (blocage possible de cette machine)")
+    ids = liste()
+    if not ids: sys.exit("ERREUR: aucune reponse du site (blocage possible de cette machine)")
+    if rid is None or rid not in ids:
+        if rid is not None: print("round", rid, "n'est plus dans la liste, recherche automatique", flush=True)
+        rid = auto_start() or ids[0]
         open(STATE, "w").write(str(rid))
-    t0 = time.time(); odds = {}; seen = {}; cur = None
+    t0 = time.time(); odds = {}; stable = {}; since = {}; cur = None
     print("depart au round", rid, flush=True)
     while time.time() - t0 < maxmin * 60:
-        for r in range(rid, rid + 4):
+        ids = liste()
+        if ids and rid not in ids:
+            print("round", rid, "disparu de la liste, recherche automatique", flush=True)
+            odds.clear(); stable.clear(); since.clear()
+            rid = auto_start() or ids[0]; open(STATE, "w").write(str(rid)); print("nouveau depart", rid, flush=True)
+        open_later = False; got = {}
+        for r in range(rid, rid + 6):
             ev = fetch(r)
             if not ev: continue
-            seen.setdefault(r, time.time())
-            evs = [read_event(e) for e in ev]
+            evs = [read_event(e) for e in ev]; got[r] = evs
+            since.setdefault(r, time.time())
             if any("odds_1" in e for e in evs):
-                odds[r] = {e["event_id"]: e for e in evs}      # keep last odds seen
-            if r == rid and all("minute" in e for e in evs):
-                if all(e["minute"] >= 90 and "ft_home" in e for e in evs):
-                    cur = writer_for_today(cur); n = 0
-                    for e in evs:
-                        base = odds.get(r, {}).get(e["event_id"])
-                        if not base: continue
-                        row = dict(base, round=r, ft_home=e["ft_home"], ft_away=e["ft_away"],
-                                   result="1" if e["ft_home"] > e["ft_away"] else
-                                          "2" if e["ft_home"] < e["ft_away"] else "X")
-                        cur[1].writerow(row); n += 1
-                    cur[2].flush(); print("round", r, "->", n, "matchs", flush=True)
-                    odds.pop(r, None); seen.pop(r, None); rid += 1
-                    open(STATE, "w").write(str(rid))
-        # round bloque depuis 25 min (introuvable ou jamais termine): on passe au suivant
-        if rid in seen and time.time() - seen[rid] > 1500 or (rid not in seen and any(k > rid for k in seen) and time.time() - min(seen.values()) > 600):
-            print("round", rid, "abandonne", flush=True); odds.pop(rid, None); seen.pop(rid, None); rid += 1
-            open(STATE, "w").write(str(rid))
+                odds[r] = {e["event_id"]: e for e in evs}      # derniere cote vue
+                if r > rid: open_later = True
+        evs = got.get(rid)
+        if evs and all("ft_home" in e for e in evs):
+            sig = tuple((e["event_id"], e["ft_home"], e["ft_away"]) for e in evs)
+            if stable.get(rid, (None,))[0] != sig: stable[rid] = (sig, time.time())
+            # fini = scores complets, inchanges depuis 90 s, et un round suivant est deja ouvert aux paris
+            if time.time() - stable[rid][1] >= 90 and open_later:
+                cur = writer_for_today(cur); n = 0
+                for e in evs:
+                    base = odds.get(rid, {}).get(e["event_id"])
+                    if not base: continue
+                    row = dict(base, round=rid, ft_home=e["ft_home"], ft_away=e["ft_away"],
+                               result="1" if e["ft_home"] > e["ft_away"] else
+                                      "2" if e["ft_home"] < e["ft_away"] else "X")
+                    cur[1].writerow(row); n += 1
+                cur[2].flush(); print("round", rid, "->", n, "matchs", flush=True)
+                odds.pop(rid, None); stable.pop(rid, None); since.pop(rid, None); rid += 1
+                open(STATE, "w").write(str(rid))
+        if rid in since and time.time() - since[rid] > 7200:
+            print("round", rid, "abandonne (bloque depuis 2 h)", flush=True)
+            odds.pop(rid, None); since.pop(rid, None); rid += 1; open(STATE, "w").write(str(rid))
         time.sleep(20)
     open(STATE, "w").write(str(rid)); print("fin de session, prochain round:", rid)
 
