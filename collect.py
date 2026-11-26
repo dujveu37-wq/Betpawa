@@ -121,9 +121,13 @@ def main():
         rid = auto_start() or ids[0]
         open(STATE, "w").write(str(rid))
     t0 = time.time(); odds = {}; stable = {}; since = {}; cur = None
+    last_ok = time.time(); last_beat = time.time(); saved = 0
     print("depart au round", rid, flush=True)
     while time.time() - t0 < maxmin * 60:
         ids = liste()
+        if time.time() - last_beat > 600:
+            print("vivant: round", rid, "| site", "ok" if time.time() - last_ok < 120 else "SANS REPONSE",
+                  "| rounds ecrits", saved, flush=True); last_beat = time.time()
         if ids and rid not in ids:
             print("round", rid, "disparu de la liste, recherche automatique", flush=True)
             odds.clear(); stable.clear(); since.clear()
@@ -137,6 +141,9 @@ def main():
             if any("odds_1" in e for e in evs):
                 odds[r] = {e["event_id"]: e for e in evs}      # derniere cote vue
                 if r > rid: open_later = True
+        if ids and got: last_ok = time.time()
+        if time.time() - last_ok > 900:
+            sys.exit("ERREUR: le site ne repond plus depuis 15 min (machine bloquee?), arret pour changer de machine")
         evs = got.get(rid)
         if evs and all("ft_home" in e for e in evs):
             sig = tuple((e["event_id"], e["ft_home"], e["ft_away"]) for e in evs)
@@ -151,7 +158,7 @@ def main():
                                result="1" if e["ft_home"] > e["ft_away"] else
                                       "2" if e["ft_home"] < e["ft_away"] else "X")
                     cur[1].writerow(row); n += 1
-                cur[2].flush(); print("round", rid, "->", n, "matchs", flush=True)
+                cur[2].flush(); saved += 1; print("round", rid, "->", n, "matchs", flush=True)
                 odds.pop(rid, None); stable.pop(rid, None); since.pop(rid, None); rid += 1
                 open(STATE, "w").write(str(rid))
         if rid in since and time.time() - since[rid] > 7200:
