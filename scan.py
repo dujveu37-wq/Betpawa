@@ -162,15 +162,16 @@ def open_round():
 
 CHAT_IDS = [x for x in os.environ.get("TELEGRAM_CHAT_IDS", "-1003545879698,7219903652").split(",") if x]
 # par defaut : canal "Zicote Cote en direct" + ton chat prive
-def telegram(text):
-    """Envoie le message a chaque chat. Token du bot dans la variable TELEGRAM_TOKEN."""
+PRIVATE_ID = os.environ.get("TELEGRAM_PRIVATE_ID", "7219903652")   # ton chat prive
+def telegram(text, chats=None, md=False):
+    """Envoie le message aux chats donnes (par defaut: tous). Token du bot dans TELEGRAM_TOKEN."""
     tok = os.environ.get("TELEGRAM_TOKEN")
     if not tok:
         print("(Telegram non envoye : variable TELEGRAM_TOKEN absente)"); return
-    for cid in CHAT_IDS:
+    for cid in (chats or CHAT_IDS):
         r = subprocess.run(["curl", "-s", "-m", "20", "-X", "POST",
             "https://api.telegram.org/bot%s/sendMessage" % tok,
-            "--data-urlencode", "chat_id=" + cid, "--data-urlencode", "text=" + text], capture_output=True)
+            "--data-urlencode", "chat_id=" + cid, "--data-urlencode", "text=" + text] + (["-d", "parse_mode=Markdown"] if md else []), capture_output=True)
         print("Telegram", cid, ":", "envoye" if b'"ok":true' in r.stdout else "ECHEC " + r.stdout.decode()[:200])
 
 def verdict(d, mu1, mu2):
@@ -181,26 +182,51 @@ def verdict(d, mu1, mu2):
     if mu1 > 0 and mu2 > 0: return "PISTE FAIBLE (positif des 2 cotes, non significatif)"
     return None
 
-def report(evs, cells):
-    """Une ligne par match : verdict + marches positifs d'un cote ou de l'autre."""
-    order = {"SIGNAL VALIDE": 0, "SURVEILLANCE": 1}; valid = []
+def deja_vu(rows, e):
+    """Scores des matchs passes avec les memes equipes et exactement les memes cotes 1X2."""
+    try: k = (e["home"], e["away"], float(e["odds_1"]), float(e["odds_X"]), float(e["odds_2"]))
+    except (KeyError, ValueError, TypeError): return []
+    return [(r["rnd"], r["ft_home"] + "-" + r["ft_away"]) for r in rows
+            if (r["home"], r["away"], r["odds_1"], r["odds_X"], r["odds_2"]) == k]
+
+LABEL = {"1": "1 (%s)", "X": "X (nul)", "2": "2 (%s)", "over_1.5": "Plus de 1.5", "under_1.5": "Moins de 1.5",
+         "over_2.5": "Plus de 2.5", "under_2.5": "Moins de 2.5", "over_3.5": "Plus de 3.5", "under_3.5": "Moins de 3.5"}
+ORDER = ["1", "X", "2", "over_1.5", "under_1.5", "over_2.5", "under_2.5", "over_3.5", "under_3.5"]
+
+def analyse(e, cells):
+    """Pour un match : liste (marche, cote, decision, ancien, recent) dans l'ordre d'affichage."""
+    out = []
+    for m in ORDER:
+        c = MK[m][0]
+        try: o = float(e[c])
+        except (KeyError, ValueError, TypeError): continue
+        for lo, hi, d, mu1, se1, mu2 in cells.get(m, []):
+            if lo <= o < hi: out.append((m, o, d, mu1, mu2)); break
+    return out
+
+def report(evs, cells, rows=()):
+    """Tableau par match. Retourne (signaux valides, matchs avec 2 positifs)."""
+    valid, double = [], []
     for e in evs:
-        name = "%s-%s" % (e["home"], e["away"]); items = []
-        for m, (c, _) in MK.items():
-            try: o = float(e[c])
-            except (KeyError, ValueError, TypeError): continue
-            for lo, hi, d, mu1, se1, mu2 in cells.get(m, []):
-                if lo <= o < hi:
-                    v = verdict(d, mu1, mu2)
-                    if v: items.append((order.get(v, 2), -mu1, v, m, o, mu1, mu2))
-        items.sort()
-        valid += ["%s  %s @%.2f  (ancien %+.1f%%, recent %+.1f%%)" % (name, x[3], x[4], 100*x[5], 100*x[6]) for x in items if x[2] == "SIGNAL VALIDE"]
-        top = items[0][2] if items else "AUCUN SIGNAL"
-        print("\n%s : %s" % (name, "AUCUN SIGNAL. Ne rien miser." if not items else top))
-        for _, _, v, m, o, mu1, mu2 in items:
-            print("   %s @%.2f  ancien %+.1f%%  recent %+.1f%%  -> %s" % (m, o, 100 * mu1, 100 * mu2, v))
-        if items and items[0][0] == 2: print("   (aucune piste validee : ne rien miser)")
-    return valid
+        name = "%s-%s" % (e["home"], e["away"]); res = analyse(e, cells)
+        lab = lambda m: LABEL[m] % (e["home"] if m == "1" else e["away"]) if "%s" in LABEL[m] else LABEL[m]
+        ok = [r for r in res if r[2] == "SIGNAL VALIDE"]
+        surv = [r for r in res if r[2] == "SURVEILLANCE"]
+        pos = [r for r in res if r[2] not in ("SIGNAL VALIDE", "SURVEILLANCE") and r[3] > 0 and r[4] > 0]
+        top = "SIGNAL VALIDE" if ok else "SURVEILLANCE" if surv else "AUCUN SIGNAL. Ne rien miser."
+        L = ["%s : %s" % (name, top)]
+        dv = deja_vu(rows, e)
+        if dv: L.append("Rappel : deja vu %d fois avec ces cotes : %s" % (len(dv), ", ".join(sc for _, sc in dv)))
+        L.append("%-14s %5s %7s %7s" % ("Marche", "Cote", "Ancien", "Recent"))
+        for m, o, d, mu1, mu2 in res:
+            flag = "  <-- 2 POSITIFS" if (m, o, d, mu1, mu2) in pos else "  <-- " + d if d in ("SIGNAL VALIDE", "SURVEILLANCE") else ""
+            L.append("%-14s %5.2f %+6.1f%% %+6.1f%%%s" % (lab(m), o, 100 * mu1, 100 * mu2, flag))
+        text = "\n".join(L); print("\n" + text)
+        for m, o, d, mu1, mu2 in ok:
+            valid.append("%s  %s @%.2f  (ancien %+.1f%%, recent %+.1f%%)" % (name, lab(m), o, 100 * mu1, 100 * mu2))
+        if pos:
+            double.append((name, text, ["%s @%.2f (ancien %+.1f%%, recent %+.1f%%)" % (lab(m), o, 100 * mu1, 100 * mu2) for m, o, d, mu1, mu2 in pos]))
+    return valid, double
 
 def scan(files, loop=False, max_min=340):
     rows = load(files)
@@ -214,7 +240,10 @@ def scan(files, loop=False, max_min=340):
         elif rid not in done:
             done.add(rid)
             print("\nround", rid, "|", len(evs), "matchs ouverts | heure UTC:", datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S"))
-            valid = report(evs, cells)
+            valid, double = report(evs, cells, rows)
+            for name, text, lines in double:   # tableau puis message, dans ton Telegram prive
+                telegram("```\n" + text + "\n```", chats=[PRIVATE_ID], md=True)
+                telegram("2 POSITIFS (ancien ET recent) - %s\n%s\n\nPiste faible, non validee. Petite mise fixe seulement." % (name, "\n".join(lines)), chats=[PRIVATE_ID])
             if valid:
                 telegram("SIGNAL VALIDE - round %s\n" % rid + "\n".join(valid) + "\n\nPari non garanti. Misez avec prudence.")
             else:
