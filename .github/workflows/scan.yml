@@ -1,0 +1,16 @@
+name: scan
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+concurrency: scan
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan en boucle
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        run: python scan.py --loop --max-minutes 340
