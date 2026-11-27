@@ -112,7 +112,6 @@ MK = {  # marche: (colonne de cote, condition gagnante sur le total de buts)
  "over_3.5": ("over_3.5", lambda r: r["tot"] >= 4), "under_3.5": ("under_3.5", lambda r: r["tot"] <= 3),
  "1": ("odds_1", lambda r: r["result"] == "1"), "X": ("odds_X", lambda r: r["result"] == "X"),
  "2": ("odds_2", lambda r: r["result"] == "2")}
-LEAGUE = os.environ.get("SCAN_LEAGUE", "Ligue Anglaise")   # seule ligue scannee/envoyee
 NBINS = 8; Z95 = 1.96; ZCORR = 3.3   # correction pour ~70 tests
 def load(files):
     rows = []
@@ -240,16 +239,19 @@ def scan(files, loop=False, max_min=340):
             if not loop: sys.exit("Aucun round ouvert aux paris trouve (reessaie dans une minute).")
         elif rid not in done:
             done.add(rid)
-            evs = [e for e in evs if e.get("league") == LEAGUE]
-            print("\nround", rid, "|", len(evs), "matchs", LEAGUE, "ouverts | heure UTC:", datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S"))
+            print("\nround", rid, "|", len(evs), "matchs ouverts | heure UTC:", datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S"))
             valid, double = report(evs, cells, rows)
-            for name, text, lines in double:   # tableau puis message, dans ton Telegram prive
-                telegram("```\n" + text + "\n```", chats=[PRIVATE_ID], md=True)
-                telegram("2 POSITIFS (ancien ET recent) - %s\n%s\n\nPiste faible, non validee. Petite mise fixe seulement." % (name, "\n".join(lines)), chats=[PRIVATE_ID])
-            if valid:
-                telegram("SIGNAL VALIDE - round %s\n" % rid + "\n".join(valid) + "\n\nPari non garanti. Misez avec prudence.")
+            # Telegram : format court uniquement. Les conditions de detection
+            # existantes (ancien ET recent positifs) restent inchangees.
+            if double:
+                for name, _text, _lines in double:
+                    match_name = name.replace("-", " vs ", 1)
+                    telegram(
+                        "⚽ DOUBLE CHANCE 12 ✅\n\nMatch : %s\n\nMiser sur 12" % match_name,
+                        chats=[PRIVATE_ID]
+                    )
             else:
-                print("Rien envoye sur Telegram (aucun SIGNAL VALIDE).")
+                print("Aucun signal Double Chance 1-2 : conditions ancien + recent non reunies.")
         if not loop or time.time() - t0 > max_min * 60: break
         time.sleep(20)
 
