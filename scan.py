@@ -112,6 +112,7 @@ MK = {  # marche: (colonne de cote, condition gagnante sur le total de buts)
  "over_3.5": ("over_3.5", lambda r: r["tot"] >= 4), "under_3.5": ("under_3.5", lambda r: r["tot"] <= 3),
  "1": ("odds_1", lambda r: r["result"] == "1"), "X": ("odds_X", lambda r: r["result"] == "X"),
  "2": ("odds_2", lambda r: r["result"] == "2")}
+LEAGUE = os.environ.get("SCAN_LEAGUE", "Ligue Anglaise")   # seule ligue scannee/envoyee
 NBINS = 8; Z95 = 1.96; ZCORR = 3.3   # correction pour ~70 tests
 def load(files):
     rows = []
@@ -239,7 +240,8 @@ def scan(files, loop=False, max_min=340):
             if not loop: sys.exit("Aucun round ouvert aux paris trouve (reessaie dans une minute).")
         elif rid not in done:
             done.add(rid)
-            print("\nround", rid, "|", len(evs), "matchs ouverts | heure UTC:", datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S"))
+            evs = [e for e in evs if e.get("league") == LEAGUE]
+            print("\nround", rid, "|", len(evs), "matchs", LEAGUE, "ouverts | heure UTC:", datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S"))
             valid, double = report(evs, cells, rows)
             for name, text, lines in double:   # tableau puis message, dans ton Telegram prive
                 telegram("```\n" + text + "\n```", chats=[PRIVATE_ID], md=True)
