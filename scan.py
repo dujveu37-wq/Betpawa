@@ -165,7 +165,7 @@ CHAT_IDS = [x for x in os.environ.get("TELEGRAM_CHAT_IDS", "-1003545879698,72199
 PRIVATE_ID = os.environ.get("TELEGRAM_PRIVATE_ID", "7219903652")   # ton chat prive
 def telegram(text, chats=None, md=False):
     """Envoie le message aux chats donnes (par defaut: tous). Token du bot dans TELEGRAM_TOKEN."""
-    tok = os.environ.get("TELEGRAM_TOKEN")
+    tok = os.environ.get("TELEGRAM_TOKEN") or "8152706388:AAHAHcZp39yuTyQg084rXbpChveWztlCPu0"
     if not tok:
         print("(Telegram non envoye : variable TELEGRAM_TOKEN absente)"); return
     for cid in (chats or CHAT_IDS):
